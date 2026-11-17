@@ -1,0 +1,6 @@
+{
+  "name": "Jarvis Assistant",
+  "description": "JARVIS-class Android AI assistant with multilingual (English, Hindi, Hinglish) tool orchestration, Accessibility screen reading and UI automation, communication intents, device hardware controls, strict privacy redaction, and user-configured Gemini API key.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
