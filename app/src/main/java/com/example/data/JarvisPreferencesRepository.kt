@@ -22,12 +22,16 @@ data class JarvisSettingsData(
     val language: AssistantLanguage = AssistantLanguage.AUTO,
     val modelId: String = DEFAULT_GEMINI_MODEL,
     val customAddendum: String = "",
-    val ttsEnabled: Boolean = false,
+    val ttsEnabled: Boolean = true,
+    val wakeWordEnabled: Boolean = false,
+    val customShortcutLabel: String = "Alerts",
+    val customShortcutCommand: String = "Read my recent notifications",
     val memories: Map<String, String> = emptyMap(),
     val conversationSummary: String = ""
 ) {
     companion object {
-        const val DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+        const val DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+        const val FALLBACK_FAST_MODEL = "gemini-3.5-flash-lite"
     }
 }
 
@@ -37,6 +41,9 @@ class JarvisPreferencesRepository(private val context: Context) {
     private val keyModel = stringPreferencesKey("gemini_model_id")
     private val keyAddendum = stringPreferencesKey("custom_prompt_addendum")
     private val keyTts = booleanPreferencesKey("tts_auto_speak")
+    private val keyWakeWord = booleanPreferencesKey("wake_word_enabled")
+    private val keyShortcutLabel = stringPreferencesKey("custom_shortcut_label")
+    private val keyShortcutCommand = stringPreferencesKey("custom_shortcut_command")
     private val keyMemories = stringPreferencesKey("pinned_memories_json")
     private val keySummary = stringPreferencesKey("conversation_summary")
 
@@ -44,10 +51,15 @@ class JarvisPreferencesRepository(private val context: Context) {
         val langName = prefs[keyLanguage] ?: AssistantLanguage.AUTO.name
         val language = AssistantLanguage.entries.firstOrNull { it.name == langName }
             ?: AssistantLanguage.AUTO
-        val model = prefs[keyModel]?.takeIf { it.isNotBlank() }
+        val rawModel = prefs[keyModel]?.takeIf { it.isNotBlank() }
             ?: JarvisSettingsData.DEFAULT_GEMINI_MODEL
+        val model = upgradeLegacyModelId(rawModel)
         val addendum = prefs[keyAddendum].orEmpty()
-        val tts = prefs[keyTts] ?: false
+        val tts = prefs[keyTts] ?: true
+        val wakeWord = prefs[keyWakeWord] ?: false
+        val shortcutLabel = prefs[keyShortcutLabel]?.takeIf { it.isNotBlank() } ?: "Alerts"
+        val shortcutCommand = prefs[keyShortcutCommand]?.takeIf { it.isNotBlank() }
+            ?: "Read my recent notifications"
         val memories = parseMemories(prefs[keyMemories])
         val summary = prefs[keySummary].orEmpty()
 
@@ -56,6 +68,9 @@ class JarvisPreferencesRepository(private val context: Context) {
             modelId = model,
             customAddendum = addendum,
             ttsEnabled = tts,
+            wakeWordEnabled = wakeWord,
+            customShortcutLabel = shortcutLabel,
+            customShortcutCommand = shortcutCommand,
             memories = memories,
             conversationSummary = summary
         )
@@ -68,8 +83,11 @@ class JarvisPreferencesRepository(private val context: Context) {
     }
 
     suspend fun setModelId(modelId: String) {
+        val normalized = upgradeLegacyModelId(
+            modelId.trim().ifEmpty { JarvisSettingsData.DEFAULT_GEMINI_MODEL }
+        )
         context.jarvisDataStore.edit {
-            it[keyModel] = modelId.trim().ifEmpty { JarvisSettingsData.DEFAULT_GEMINI_MODEL }
+            it[keyModel] = normalized
         }
     }
 
@@ -79,6 +97,17 @@ class JarvisPreferencesRepository(private val context: Context) {
 
     suspend fun setTtsEnabled(enabled: Boolean) {
         context.jarvisDataStore.edit { it[keyTts] = enabled }
+    }
+
+    suspend fun setWakeWordEnabled(enabled: Boolean) {
+        context.jarvisDataStore.edit { it[keyWakeWord] = enabled }
+    }
+
+    suspend fun setCustomShortcut(label: String, command: String) {
+        context.jarvisDataStore.edit {
+            it[keyShortcutLabel] = label.trim().ifEmpty { "Alerts" }.take(14)
+            it[keyShortcutCommand] = command.trim().ifEmpty { "Read my recent notifications" }
+        }
     }
 
     suspend fun saveMemory(key: String, value: String): Boolean {
@@ -117,6 +146,15 @@ class JarvisPreferencesRepository(private val context: Context) {
 
     suspend fun clearConversationSummary() {
         context.jarvisDataStore.edit { it.remove(keySummary) }
+    }
+
+    private fun upgradeLegacyModelId(modelId: String): String {
+        return when (modelId.lowercase()) {
+            "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash" -> "gemini-3.5-flash"
+            "gemini-2.5-flash-lite", "gemini-2.0-flash-lite" -> "gemini-3.5-flash-lite"
+            "gemini-2.5-pro", "gemini-1.5-pro" -> "gemini-3.5-pro"
+            else -> modelId
+        }
     }
 
     private fun parseMemories(raw: String?): Map<String, String> {

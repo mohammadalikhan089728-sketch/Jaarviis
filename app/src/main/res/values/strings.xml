@@ -3,8 +3,8 @@
     <string name="accessibility_service_label">Jarvis Screen &amp; UI Controller</string>
     <string name="accessibility_service_description">Allows Jarvis Assistant to read non-sensitive on-screen UI elements and perform automated clicks, scrolls, and navigation when instructed. Passwords, PINs, OTPs, and payment card fields are strictly redacted on-device and never read or stored.</string>
     <string name="notification_listener_label">Jarvis Notification Reader</string>
-    <string name="tab_console">Console</string>
-    <string name="tab_prompt">Prompt</string>
-    <string name="tab_tools">Tools</string>
+    <string name="tab_home">Home</string>
+    <string name="tab_automations">Automations</string>
+    <string name="tab_activity">Activity</string>
     <string name="tab_settings">Settings</string>
 </resources>

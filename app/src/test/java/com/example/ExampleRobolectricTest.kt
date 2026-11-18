@@ -56,4 +56,9 @@ class ExampleRobolectricTest {
         val passMsg = PrivacyGuard.redactSensitiveText("password=MySecretValue123")
         assertFalse(passMsg.sanitizedText.contains("MySecretValue123"))
     }
+
+    @Test
+    fun `default model is gemini 3_5 flash`() {
+        assertEquals("gemini-3.5-flash", com.example.data.JarvisSettingsData.DEFAULT_GEMINI_MODEL)
+    }
 }

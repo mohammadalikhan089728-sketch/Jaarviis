@@ -2,15 +2,19 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Tactical Arc-HUD Dark Palette
-val ObsidianBg = Color(0xFF070B12)
-val ObsidianSurface = Color(0xFF0E1624)
-val ObsidianSurfaceHigh = Color(0xFF142033)
-val ObsidianOutline = Color(0xFF23344D)
+// Minimalist Dark Voice Assistant Palette
+val ObsidianBg = Color(0xFF0B0F14)
+val ObsidianSurface = Color(0xFF151B24)
+val ObsidianSurfaceHigh = Color(0xFF1C2430)
+val ObsidianOutline = Color(0xFF253041)
 
-val ArcCyan = Color(0xFF00E5FF)
-val ArcCyanDim = Color(0xFF0097A7)
-val ArcCyanContainer = Color(0xFF063240)
+val ArcCyan = Color(0xFF4DD0E1)
+val ArcCyanBright = Color(0xFF00E5FF)
+val ArcCyanContainer = Color(0xFF0E2C36)
+
+val OrbPurple = Color(0xFF9B6BFF)
+val OrbPink = Color(0xFFEC4899)
+val OrbCyan = Color(0xFF22D3EE)
 
 val TelemetryAmber = Color(0xFFFFB300)
 val TelemetryAmberContainer = Color(0xFF3A2800)
@@ -21,8 +25,8 @@ val EmeraldContainer = Color(0xFF04381E)
 val AlertRose = Color(0xFFFF5252)
 val AlertRoseContainer = Color(0xFF3E1015)
 
-val TextPrimaryDark = Color(0xFFEAF2FA)
-val TextSecondaryDark = Color(0xFF91A6C2)
+val TextPrimaryDark = Color(0xFFF3F6FA)
+val TextSecondaryDark = Color(0xFF8C9BB0)
 
 // Clean Tactical Light Palette (fallback if system light theme is forced)
 val CrispLightBg = Color(0xFFF3F7FB)

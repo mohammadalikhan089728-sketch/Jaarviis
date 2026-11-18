@@ -2,6 +2,7 @@ package com.example.ui
 
 import android.app.Application
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.ExecutedToolLog
@@ -23,12 +24,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.util.Locale
 
 enum class ChatAuthor { USER, JARVIS, SYSTEM }
+
+enum class OrbPhase { STANDBY, LISTENING, THINKING, SPEAKING }
 
 data class ChatMessage(
     val id: Long,
@@ -38,6 +42,14 @@ data class ChatMessage(
     val isError: Boolean = false,
     val requiresApiKeySetup: Boolean = false,
     val timestampMillis: Long = System.currentTimeMillis()
+)
+
+data class RecentInteraction(
+    val id: Long,
+    val query: String,
+    val response: String,
+    val toolCount: Int,
+    val timestampMillis: Long
 )
 
 sealed interface AssistantRunState {
@@ -90,8 +102,34 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
+    private val _recentInteractions = MutableStateFlow<List<RecentInteraction>>(emptyList())
+    val recentInteractions: StateFlow<List<RecentInteraction>> = _recentInteractions.asStateFlow()
+
     private val _runState = MutableStateFlow<AssistantRunState>(AssistantRunState.Idle)
     val runState: StateFlow<AssistantRunState> = _runState.asStateFlow()
+
+    private val _isListening = MutableStateFlow(false)
+    val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
+
+    private val _isSpeaking = MutableStateFlow(false)
+    val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
+
+    val orbPhase: StateFlow<OrbPhase> = combine(
+        _isListening,
+        _runState,
+        _isSpeaking
+    ) { listening, running, speaking ->
+        when {
+            listening -> OrbPhase.LISTENING
+            running is AssistantRunState.Running -> OrbPhase.THINKING
+            speaking -> OrbPhase.SPEAKING
+            else -> OrbPhase.STANDBY
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = OrbPhase.STANDBY
+    )
 
     private val _hasApiKey = MutableStateFlow(apiKeyVault.hasApiKey())
     val hasApiKey: StateFlow<Boolean> = _hasApiKey.asStateFlow()
@@ -103,13 +141,24 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
     val keyVerification: StateFlow<KeyVerificationState> = _keyVerification.asStateFlow()
 
     init {
-        _messages.value = listOf(
-            ChatMessage(
-                id = nextId(),
-                author = ChatAuthor.JARVIS,
-                text = buildWelcomeMessage()
-            )
-        )
+        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                _isSpeaking.value = true
+            }
+
+            override fun onDone(utteranceId: String?) {
+                _isSpeaking.value = false
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                _isSpeaking.value = false
+            }
+
+            override fun onError(utteranceId: String?, errorCode: Int) {
+                _isSpeaking.value = false
+            }
+        })
     }
 
     override fun onInit(status: Int) {
@@ -117,6 +166,15 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
         if (ttsReady) {
             tts?.language = Locale.ENGLISH
         }
+    }
+
+    fun setListening(listening: Boolean) {
+        _isListening.value = listening
+    }
+
+    fun stopSpeaking() {
+        tts?.stop()
+        _isSpeaking.value = false
     }
 
     fun refreshPermissionsAndHardware() {
@@ -132,9 +190,10 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
         val privacyCheck = PrivacyGuard.redactSensitiveText(trimmed)
         val safeUserText = privacyCheck.sanitizedText
 
+        val userMsgId = nextId()
         appendMessage(
             ChatMessage(
-                id = nextId(),
+                id = userMsgId,
                 author = ChatAuthor.USER,
                 text = safeUserText
             )
@@ -142,15 +201,17 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
 
         val apiKey = apiKeyVault.getApiKey()
         if (apiKey.isNullOrBlank()) {
+            val notice = "Personal Gemini API key is not configured yet. Open Settings -> Personal Gemini API Key to add your key securely."
             appendMessage(
                 ChatMessage(
                     id = nextId(),
                     author = ChatAuthor.JARVIS,
-                    text = "Personal Gemini API key is not configured yet. Please navigate to Settings -> Personal Gemini API Key to securely store your unique key in the encrypted vault (never inside the prompt). You can also test local hardware tools directly in the Tools tab.",
+                    text = notice,
                     isError = true,
                     requiresApiKeySetup = true
                 )
             )
+            recordRecent(userMsgId, safeUserText, notice, 0)
             return
         }
 
@@ -189,6 +250,7 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
                             toolLogs = result.toolLogs
                         )
                     )
+                    recordRecent(userMsgId, safeUserText, result.replyText, result.toolLogs.size)
                     if (currentSettings.ttsEnabled) {
                         speakReply(result.replyText, currentSettings.language)
                     }
@@ -204,13 +266,14 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
                             requiresApiKeySetup = result.isAuthError
                         )
                     )
+                    recordRecent(userMsgId, safeUserText, result.message, liveToolLogs.size)
                 }
             }
             _runState.value = AssistantRunState.Idle
         }
     }
 
-    fun executeQuickLocalTool(toolName: String, args: JSONObject) {
+    fun executeQuickLocalTool(toolName: String, args: JSONObject, userLabel: String? = null) {
         viewModelScope.launch {
             val res = toolExecutor.executeTool(toolName, args)
             appendMessage(
@@ -229,6 +292,9 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
                     isError = !res.success
                 )
             )
+            if (userLabel != null) {
+                recordRecent(nextId(), userLabel, res.summary, 1)
+            }
         }
     }
 
@@ -247,8 +313,16 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
     fun setTtsEnabled(enabled: Boolean) {
         viewModelScope.launch { prefsRepo.setTtsEnabled(enabled) }
         if (!enabled) {
-            tts?.stop()
+            stopSpeaking()
         }
+    }
+
+    fun setWakeWordEnabled(enabled: Boolean) {
+        viewModelScope.launch { prefsRepo.setWakeWordEnabled(enabled) }
+    }
+
+    fun setCustomShortcut(label: String, command: String) {
+        viewModelScope.launch { prefsRepo.setCustomShortcut(label, command) }
     }
 
     fun saveApiKey(rawKey: String) {
@@ -311,14 +385,20 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
 
     fun clearConversationContext() {
         apiHistory.clear()
+        _messages.value = emptyList()
+        _recentInteractions.value = emptyList()
         viewModelScope.launch { prefsRepo.clearConversationSummary() }
-        _messages.value = listOf(
-            ChatMessage(
-                id = nextId(),
-                author = ChatAuthor.JARVIS,
-                text = "Conversation context cleared. Ready for your next command in English, Hindi, or Hinglish."
-            )
+    }
+
+    private fun recordRecent(id: Long, query: String, response: String, toolCount: Int) {
+        val entry = RecentInteraction(
+            id = id,
+            query = query,
+            response = response,
+            toolCount = toolCount,
+            timestampMillis = System.currentTimeMillis()
         )
+        _recentInteractions.value = (listOf(entry) + _recentInteractions.value).take(20)
     }
 
     private fun speakReply(text: String, language: AssistantLanguage) {
@@ -348,15 +428,6 @@ class JarvisViewModel(application: Application) : AndroidViewModel(application),
     private fun buildConversationSummary(): String {
         val recent = _messages.value.takeLast(6)
         return recent.joinToString(" | ") { "${it.author.name}: ${it.text.take(80)}" }
-    }
-
-    private fun buildWelcomeMessage(): String {
-        val keyStatus = if (apiKeyVault.hasApiKey()) {
-            "Gemini API key vault is active."
-        } else {
-            "To activate AI reasoning, open Settings and enter your personal Gemini API key (stored encrypted on-device, never inside the prompt)."
-        }
-        return "JARVIS Core online. Speak or type in English, Hindi, or Hinglish. $keyStatus For full screen reading & UI clicks, enable Accessibility Service and Notification Access in Settings."
     }
 
     private fun appendMessage(msg: ChatMessage) {
